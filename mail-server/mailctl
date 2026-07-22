@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wrapper for account CRUD. Install as /usr/local/sbin/mailctl on the mail VPS.
+# Required root-owned config: /etc/mailops/mailctl.env
+#   MAILCTL_URL=http://stalwart:8080
+#   MAILCTL_USER=<limited automation account>
+#   MAILCTL_PASSWORD=<automation account password>
+#   MAILCTL_DOMAIN_ID=<Stalwart domain id>
+#   MAILCTL_DOMAIN=filipeivopereira.com
+#   MAILCTL_AUDIT_LOG=/var/log/mailops/audit.jsonl
+#   MAILCTL_BACKUP_COMMAND=/usr/local/sbin/mailctl-backup-account
+
+CONFIG=/etc/mailops/mailctl.env
+[[ -r "$CONFIG" ]] || { echo "Missing $CONFIG" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "$CONFIG"
+: "${MAILCTL_URL:?}" "${MAILCTL_USER:?}" "${MAILCTL_PASSWORD:?}" "${MAILCTL_DOMAIN_ID:?}" "${MAILCTL_DOMAIN:?}"
+AUDIT_LOG=${MAILCTL_AUDIT_LOG:-/var/log/mailops/audit.jsonl}
+
+api() {
+  curl --silent --show-error --fail-with-body \
+    --user "$MAILCTL_USER:$MAILCTL_PASSWORD" \
+    --header 'Content-Type: application/json' \
+    --data @- "$MAILCTL_URL/api"
+}
+
+audit() {
+  install -d -m 0700 "$(dirname "$AUDIT_LOG")"
+  jq -cn --arg action "$1" --arg target "$2" --arg result "$3" \
+    '{timestamp:(now|todateiso8601),actor:"mailops",action:$action,target:$target,result:$result}' \
+    >> "$AUDIT_LOG"
+}
+
+call() {
+  local method=$1 payload=$2
+  jq -cn --arg method "$method" --argjson args "$payload" \
+    '{using:["urn:ietf:params:jmap:core","urn:stalwart:jmap"],methodCalls:[[$method,$args,"c1"]]}' | api
+}
+
+account_id() {
+  local address=$1 localpart=${1%@*}
+  [[ $address == *"@${MAILCTL_DOMAIN}" ]] || { echo "Address must belong to $MAILCTL_DOMAIN" >&2; exit 2; }
+  [[ $localpart =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo 'Invalid local part' >&2; exit 2; }
+  local payload
+  payload=$(jq -cn --arg name "$localpart" --arg domain "$MAILCTL_DOMAIN_ID" '{filter:{name:$name,domainId:$domain}}')
+  call x:Account/query "$payload" \
+    | jq -er '.methodResponses[0][1].ids[0]'
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mailctl list
+  mailctl create localpart display-name [quota-bytes] [password]
+  mailctl password address password
+  mailctl alias-add address alias-localpart [description]
+  mailctl alias-remove address alias-localpart
+  mailctl delete address --confirm address
+EOF
+}
+
+case "${1:-}" in
+  list)
+    result=$(call x:Account/query "{\"filter\":{\"domainId\":\"$MAILCTL_DOMAIN_ID\"}}")
+    ids=$(jq -c '.methodResponses[0][1].ids' <<<"$result")
+    call x:Account/get "{\"ids\":$ids,\"properties\":[\"id\",\"emailAddress\",\"description\",\"aliases\",\"quotas\",\"usedDiskQuota\",\"createdAt\"]}" \
+      | jq '.methodResponses[0][1].list'
+    ;;
+  create)
+    [[ $# -ge 3 && $# -le 5 ]] || { usage; exit 2; }
+    localpart=$2; description=$3; quota=${4:-5368709120}; password=${5:-}
+    [[ $localpart =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo 'Invalid local part' >&2; exit 2; }
+    if [[ -z $password ]]; then password=$(openssl rand -base64 24 | tr -d '/+=\n' | cut -c1-24); fi
+    payload=$(jq -cn --arg name "$localpart" --arg description "$description" --arg domain "$MAILCTL_DOMAIN_ID" --arg password "$password" --argjson quota "$quota" \
+      '{create:{new:{"@type":"User",name:$name,description:$description,domainId:$domain,credentials:{"0":{"@type":"Password",secret:$password}},memberGroupIds:{},roles:{"@type":"User"},permissions:{"@type":"Inherit"},quotas:{maxDiskQuota:$quota},aliases:{},encryptionAtRest:{"@type":"Disabled"}}}}')
+    response=$(call x:Account/set "$payload")
+    address="$localpart@${MAILCTL_DOMAIN:-unknown}"
+    if jq -e '.methodResponses[0][1].created.new.id' >/dev/null <<<"$response"; then
+      audit create "$address" ok
+      printf 'Created %s\nPassword (show once): %s\n' "$address" "$password"
+    else
+      audit create "$address" failed
+      echo "$response" >&2; exit 1
+    fi
+    ;;
+  password)
+    [[ $# -eq 3 ]] || { usage; exit 2; }
+    id=$(account_id "$2")
+    payload=$(jq -cn --arg id "$id" --arg password "$3" '{update:{($id):{credentials:{"0":{"@type":"Password",secret:$password}}}}}')
+    call x:Account/set "$payload" >/dev/null
+    audit password "$2" ok
+    echo 'Password updated'
+    ;;
+  alias-add)
+    [[ $# -ge 3 && $# -le 4 ]] || { usage; exit 2; }
+    [[ $3 =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo 'Invalid alias local part' >&2; exit 2; }
+    id=$(account_id "$2")
+    result=$(call x:Account/get "$(jq -cn --arg id "$id" '{ids:[$id],properties:["aliases"]}')")
+    aliases=$(jq -ce '.methodResponses[0][1].list[0].aliases // {}' <<<"$result")
+    description=${4:-"Alias for $2"}
+    aliases=$(jq -ce --arg name "$3" --arg domain "$MAILCTL_DOMAIN_ID" --arg description "$description" '
+      if any(.[]; .name == $name and .domainId == $domain) then error("Alias already exists")
+      else (. | keys | map(tonumber) | max? // -1) as $last | . + {((($last + 1) | tostring)):{enabled:true,name:$name,domainId:$domain,description:$description}} end' <<<"$aliases")
+    payload=$(jq -cn --arg id "$id" --argjson aliases "$aliases" '{update:{($id):{aliases:$aliases}}}')
+    call x:Account/set "$payload" >/dev/null
+    audit alias-add "$3@$MAILCTL_DOMAIN" ok
+    echo "Alias added: $3@$MAILCTL_DOMAIN -> $2"
+    ;;
+  alias-remove)
+    [[ $# -eq 3 ]] || { usage; exit 2; }
+    [[ $3 =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo 'Invalid alias local part' >&2; exit 2; }
+    id=$(account_id "$2")
+    result=$(call x:Account/get "$(jq -cn --arg id "$id" '{ids:[$id],properties:["aliases"]}')")
+    aliases=$(jq -ce --arg name "$3" --arg domain "$MAILCTL_DOMAIN_ID" '
+      .methodResponses[0][1].list[0].aliases // {} | with_entries(select(.value.name != $name or .value.domainId != $domain))' <<<"$result")
+    payload=$(jq -cn --arg id "$id" --argjson aliases "$aliases" '{update:{($id):{aliases:$aliases}}}')
+    call x:Account/set "$payload" >/dev/null
+    audit alias-remove "$3@$MAILCTL_DOMAIN" ok
+    echo "Alias removed: $3@$MAILCTL_DOMAIN"
+    ;;
+  delete)
+    [[ $# -eq 4 && $3 == --confirm && $4 == "$2" ]] || { usage; exit 2; }
+    id=$(account_id "$2")
+    : "${MAILCTL_BACKUP_COMMAND:?Set MAILCTL_BACKUP_COMMAND before deleting an account}"
+    [[ -x $MAILCTL_BACKUP_COMMAND ]] || { echo "Backup command is not executable: $MAILCTL_BACKUP_COMMAND" >&2; exit 1; }
+    "$MAILCTL_BACKUP_COMMAND" "$2"
+    call x:Account/set "{\"destroy\":[\"$id\"]}" >/dev/null
+    audit delete "$2" ok
+    echo 'Account deleted'
+    ;;
+  *) usage; exit 2 ;;
+esac

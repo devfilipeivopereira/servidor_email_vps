@@ -1,0 +1,8 @@
+# Credenciais e configurações locais
+DADOS DE ACESSO VPS.env
+*.env
+!*.env.example
+
+# Estado e segredos gerados durante a implantação
+mail-server/secrets/stalwart-bootstrap.env
+mail-server/.env

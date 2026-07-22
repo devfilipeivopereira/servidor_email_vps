@@ -1,0 +1,71 @@
+name: mailserver
+
+services:
+  traefik:
+    image: ${TRAEFIK_IMAGE}
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --accesslog=true
+      - --log.level=INFO
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/letsencrypt
+    networks: [mail]
+
+  stalwart:
+    image: ${STALWART_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ./secrets/stalwart-bootstrap.env
+    environment:
+      STALWART_PUBLIC_URL: https://${MAIL_HOST}
+    ports:
+      - 25:25
+      - 465:465
+      - 587:587
+      - 993:993
+    volumes:
+      - stalwart-etc:/etc/stalwart
+      - stalwart-data:/var/lib/stalwart
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.stalwart.rule: Host(`${MAIL_HOST}`)
+      traefik.http.routers.stalwart.entrypoints: websecure
+      traefik.http.routers.stalwart.tls.certresolver: letsencrypt
+      traefik.http.services.stalwart.loadbalancer.server.port: "8080"
+    networks: [mail]
+
+  snappymail:
+    image: ${SNAPPYMAIL_IMAGE}
+    restart: unless-stopped
+    volumes:
+      - snappymail-data:/var/lib/snappymail
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.webmail.rule: Host(`${WEBMAIL_HOST}`)
+      traefik.http.routers.webmail.entrypoints: websecure
+      traefik.http.routers.webmail.tls.certresolver: letsencrypt
+      traefik.http.services.webmail.loadbalancer.server.port: "8888"
+    networks: [mail]
+
+networks:
+  mail:
+    name: mailserver-mail
+
+volumes:
+  traefik-certificates:
+  stalwart-etc:
+  stalwart-data:
+  snappymail-data:

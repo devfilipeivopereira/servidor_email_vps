@@ -1,0 +1,41 @@
+version: "3.8"
+
+# Safe first phase for the existing production VPS. It intentionally does not
+# publish mail ports. Complete Stalwart setup and DNS/PTR validation first.
+services:
+  stalwart:
+    image: ${STALWART_IMAGE:-stalwartlabs/stalwart:v0.16}
+    environment:
+      STALWART_PUBLIC_URL: https://${MAIL_HOST}
+      STALWART_RECOVERY_ADMIN: ${STALWART_RECOVERY_ADMIN:?Set this only in the remote shell}
+    volumes:
+      - stalwart-etc:/etc/stalwart
+      - stalwart-data:/var/lib/stalwart
+    networks: [FilipeNet]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: any
+
+  snappymail:
+    image: ${SNAPPYMAIL_IMAGE:-djmaze/snappymail:v2.38.2}
+    volumes:
+      - snappymail-data:/var/lib/snappymail
+    networks: [FilipeNet]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: any
+
+networks:
+  FilipeNet:
+    external: true
+
+volumes:
+  stalwart-etc:
+  stalwart-data:
+  snappymail-data:
