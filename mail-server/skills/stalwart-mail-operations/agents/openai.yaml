@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stalwart Mail Operations"
+  short_description: "Gerencie contas e mensagens com segurança"
+  default_prompt: "Use $stalwart-mail-operations para operar contas e e-mails com segurança."

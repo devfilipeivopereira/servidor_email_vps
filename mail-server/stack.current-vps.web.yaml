@@ -1,0 +1,55 @@
+version: "3.8"
+
+# Modo web seguro: publica somente HTTPS por meio do Traefik existente.
+# Use este arquivo para manutenção antes da ativação de SMTP/IMAP público.
+services:
+  stalwart:
+    image: ${STALWART_IMAGE:-stalwartlabs/stalwart:v0.16}
+    environment:
+      STALWART_PUBLIC_URL: https://${MAIL_HOST}
+    volumes:
+      - stalwart-etc:/etc/stalwart
+      - stalwart-data:/var/lib/stalwart
+    networks: [FilipeNet]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.mail-admin.rule=Host(`${MAIL_HOST}`)
+        - traefik.http.routers.mail-admin.entrypoints=websecure
+        - traefik.http.routers.mail-admin.tls.certresolver=letsencryptresolver
+        - traefik.http.services.mail-admin.loadbalancer.server.port=8080
+      restart_policy:
+        condition: any
+
+  snappymail:
+    image: ${SNAPPYMAIL_IMAGE:-djmaze/snappymail:v2.38.2}
+    volumes:
+      - snappymail-data:/var/lib/snappymail
+    networks: [FilipeNet]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.webmail.rule=Host(`${WEBMAIL_HOST}`)
+        - traefik.http.routers.webmail.entrypoints=websecure
+        - traefik.http.routers.webmail.tls.certresolver=letsencryptresolver
+        - traefik.http.services.webmail.loadbalancer.server.port=8888
+      restart_policy:
+        condition: any
+
+networks:
+  FilipeNet:
+    external: true
+
+volumes:
+  stalwart-etc:
+    name: mail_stalwart-etc
+  stalwart-data:
+    name: mail_stalwart-data
+  snappymail-data:
+    name: mail_snappymail-data
