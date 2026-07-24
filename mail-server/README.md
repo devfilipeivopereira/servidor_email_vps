@@ -73,6 +73,21 @@ Os listeners internos do Stalwart estão ativos nas quatro portas. A conectivida
 
 Não publique portas administrativas adicionais. O painel usa HTTPS por meio do Traefik.
 
+## Webmail SnappyMail
+
+O SnappyMail é um cliente de e-mail separado do Stalwart. Como ambos rodam em contêineres distintos, **não** configure IMAP ou SMTP como `localhost`: isso faria o webmail tentar alcançar a si próprio e causa o erro `tcp://localhost:143`.
+
+A configuração operacional validada no volume do SnappyMail é:
+
+| Função | Host interno | Porta | Segurança | Autenticação |
+| --- | --- | ---: | --- | --- |
+| IMAP | `mail_stalwart` | 993 | TLS implícito | e-mail completo e senha da caixa |
+| SMTP | `mail_stalwart` | 465 | TLS implícito | e-mail completo e senha da caixa |
+
+Os dois perfis de domínio do SnappyMail (padrão e específico) devem usar esses valores, com SMTP autenticado. Após qualquer mudança, reinicie somente `mail_snappymail`, confirme que o serviço convergiu e valide a URL `https://webmail.filipeivopereira.com` antes de testar o login.
+
+Não use 143 ou 587 para a comunicação interna do SnappyMail sem uma validação específica: nesta implantação os canais internos confirmados são 993 e 465. Para clientes externos, permanecem válidos os mesmos parâmetros públicos: 993/IMAPS e 465/SMTPS.
+
 ## Brevo: saída de e-mails
 
 A conta Brevo está com o domínio autenticado. A configuração no Stalwart usa:
@@ -148,6 +163,7 @@ docker stack deploy -c stack.current-vps.production.yaml mail
 6. E-mail externo enviado por `livro_01@filipeivopereira.com` e aceito pela Brevo com resposta SMTP `250`.
 7. Resposta de um endereço Hotmail recebida com sucesso na caixa `livro_01` após a ativação do MX.
 8. Envio em HTML e texto simples validado para evitar quebras de linha literais (`\\n`).
+9. Webmail corrigido: os perfis SnappyMail agora usam `mail_stalwart` com IMAPS 993 e SMTPS 465; a página HTTPS retornou `200` após o reinício.
 
 ## Operação segura
 
@@ -171,4 +187,5 @@ O projeto inclui a skill [Stalwart Mail Operations](skills/stalwart-mail-operati
 | E-mail externo não sai | Verifique a rota `brevo`, a chave SMTP e os logs de `delivery.*` do Stalwart |
 | Rejeição por DKIM duplicado | Confirme que a rota padrão é `brevo`; não use a rota SES simultaneamente |
 | Cliente não conecta na 587 | Teste de outra rede; use 465/TLS implícito enquanto a 587 não estiver confirmada externamente |
+| Webmail informa `tcp://localhost:143` | Ajuste os perfis SnappyMail para `mail_stalwart:993` (IMAP/TLS) e `mail_stalwart:465` (SMTP/TLS com autenticação) |
 | Painel não abre | Confirme o serviço `mail_stalwart`, o Traefik e o certificado HTTPS |

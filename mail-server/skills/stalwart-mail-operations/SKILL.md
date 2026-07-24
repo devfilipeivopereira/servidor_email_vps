@@ -75,6 +75,12 @@ Antes de excluir, informe impacto (login, recebimento, aliases e retenção), fa
 - Cliente: 465/TLS implícito e 993/IMAPS estão confirmados; a 587 requer teste independente de fora da VPS antes de ser anunciada como funcional externamente.
 - Autenticação: preserve SPF, DKIM e DMARC sem duplicar registros ou assinaturas. A rota SES não deve se tornar padrão enquanto a Brevo for o relay ativo.
 
+## Operação do webmail SnappyMail
+
+O SnappyMail é um contêiner separado e não deve usar `localhost` para IMAP ou SMTP. O erro `tcp://localhost:143` significa que o perfil de domínio está apontando para o próprio webmail, e não para o Stalwart.
+
+Use a configuração interna validada: `mail_stalwart:993` com TLS implícito para IMAP e `mail_stalwart:465` com TLS implícito e autenticação para SMTP. Aplique aos perfis padrão e específico do domínio, faça backup dos JSONs de domínio antes de editar, reinicie somente `mail_snappymail` e confirme tanto a convergência do serviço quanto HTTP 200 no webmail. Não assuma que 143 ou 587 estão disponíveis entre contêineres.
+
 ## Mudanças de infraestrutura
 
 Antes de alterar a stack, salve a configuração atual e valide o YAML. Para implantar via Swarm, passe `MAIL_HOST` e `WEBMAIL_HOST` no ambiente do comando: `docker stack deploy` não carrega automaticamente um `.env`.

@@ -8,6 +8,7 @@
 - Webmail: `https://webmail.filipeivopereira.com`.
 - Relay de saída ativo: Brevo, por STARTTLS na porta 587.
 - Portas confirmadas para clientes: 465 (TLS implícito) e 993 (IMAPS). Não prometa disponibilidade pública da 587 sem teste de uma rede externa independente.
+- SnappyMail interno: IMAP em `mail_stalwart:993` e SMTP autenticado em `mail_stalwart:465`, ambos com TLS implícito. Não usar `localhost`, 143 ou 587 sem nova validação.
 
 ## Critérios de aceite
 
@@ -19,6 +20,7 @@
 | Enviar mensagem | Operação JMAP aceita e relay registra aceitação |
 | Receber mensagem | Mensagem localizada na caixa autorizada via JMAP |
 | Formatação | Texto simples tem parágrafos reais e HTML equivalente |
+| Webmail | Serviço `mail_snappymail` convergiu e URL HTTPS responde 200 após a alteração |
 
 ## Boas práticas de conteúdo
 
@@ -35,6 +37,7 @@
 3. Para falha de saída, confirme rota Brevo, conexão segura e identidade remetente autenticada.
 4. Para falha de entrada, valide MX, porta 25 e registros de recebimento.
 5. Para falha de cliente, confirme host, porta, segurança TLS e credenciais da própria caixa.
+6. Para erro `tcp://localhost:143`, corrija ambos os perfis de domínio do SnappyMail; preserve backup antes da edição e reinicie apenas o serviço do webmail.
 
 ## Operações que exigem cautela adicional
 
